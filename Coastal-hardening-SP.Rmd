@@ -1,0 +1,628 @@
+---
+title: "ASM-hardening"
+author: "André Pardal"
+date: "2/18/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+####01 Loading libraries
+```{r libraries}
+
+library(ggplot2)
+library(ggpubr)
+library(viridis)
+library(viridisLite)
+library(tidyverse)
+library(forcats)
+library(readxl)
+library(lattice)
+library(dplyr)
+library(ggmisc)
+library(ggpmisc)
+library(cowplot)
+```
+
+####02 loading and handling data
+```{r loading and handling data}
+## EN: Setting working directory to source file location ##
+rstudioapi::getActiveDocumentContext
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+#organizing raw data of coastal mapping
+hard_0 <- read_excel("ASM-coastal-hardening-SP.xlsx", sheet = 1)
+str(hard_0)
+
+hard_0$city                <- as.factor(hard_0$city)
+hard_0$ID                  <- as.factor(hard_0$ID)
+hard_0$coastlineType       <- as.factor(hard_0$coastlineType)
+hard_0$`habitat/structure` <- as.factor(hard_0$`habitat/structure`)
+hard_0$macroregion         <- as.factor(hard_0$macroregion)
+hard_0$extension_m         <- as.numeric(hard_0$extension_m)## extension in meters ##
+
+str(hard_0)
+```
+
+####04 ARTIF_ALT e EXT: Organizing dataframes 
+```{r ARTIF_ALT and ARTIF_EXT 01}
+
+## READ ME: In the paper, ARTiF_ALT = ASc; ARTIF_EXT = ASe ##
+
+## Function to round numbers ##
+round_df <- function(df, digits) {
+            nums <- vapply(df, is.numeric, FUN.VALUE = logical(1))
+            df[,nums] <- round(df[,nums], digits = digits)
+            (df)}
+
+## From RAW DATA getting only ARTIF_ALT + ARTIF_EXT data ## 
+artif_total <- droplevels(subset(hard_0, !coastlineType %in% c("ALT100", "natural")))
+str(artif_total)
+summary(artif_total)
+
+## From RAW DATA getting only ARTIF_ALT data ## 
+artif_alt <- hard_0[hard_0$coastlineType == "ARTIF_ALT",] 
+str(artif_alt)
+summary(artif_alt)
+
+## From RAW DATA getting only ARTIF_EXT data ## 
+artif_ext <- hard_0[hard_0$coastlineType == "ARTIF_EXT",] 
+str(artif_ext)
+summary(artif_ext)
+
+##General results
+sum(artif_total$extension_m)/1000 ## 244.5697 km of ARTIF_ALT + ARTIF_EXT
+sum(artif_alt$extension_m)/1000   ## 125.3511 km of ARTIF_ALT
+sum(artif_ext$extension_m)/1000   ## 119.2186 km of ARTIF_EXT
+
+##Total mapped per region
+tot_mapped <- aggregate(extension_m/1000 ~ macroregion, data = hard_0, sum)
+
+##Total mapped coastline per region excluding ARTIF_EXT
+excluding_artif_ext <- droplevels(subset(hard_0, !coastlineType %in% c("ARTIF_EXT")))
+summary(excluding_artif_ext)
+tot_mapped_coastline <- aggregate(extension_m/1000 ~ macroregion, data = excluding_artif_ext, sum)
+
+## Hardenable data
+hardenable_dt <- droplevels(subset(excluding_artif_ext, !`habitat/structure` %in% c("sandy beach", "rocky shore")))
+summary(hardenable_dt)
+
+hardenable_coastline <- aggregate(extension_m/1000 ~ macroregion, data = hardenable_dt, sum)
+
+##Soft coastline
+soft_dt <- droplevels(subset(excluding_artif_ext, !`habitat/structure` %in% c("rocky shore")))
+summary(soft_dt)
+soft_coastline <- aggregate(extension_m/1000 ~ macroregion, data = soft_dt, sum)
+
+##Natural coast
+nat0 <- droplevels(subset(hard_0, !coastlineType %in% c("ARTIF_EXT", "ARTIF_ALT", "ALT100")))
+summary(nat0)
+
+##sandy beach
+sb_dt <- nat0[nat0$`habitat/structure` == "sandy beach",] 
+summary(sb_dt)
+sb_coastline <- aggregate(extension_m/1000 ~ macroregion, data = sb_dt, sum)
+
+## rocky shore
+rs_dt <- nat0[nat0$`habitat/structure` == "rocky shore",] 
+summary(rs_dt)
+rs_coastline <- aggregate(extension_m/1000 ~ macroregion, data = rs_dt, sum)
+
+
+## Estuarine/river margins
+margins <- droplevels(subset(hard_0, !`habitat/structure` %in% c("sandy beach", "ARTIF_ALT", "ARTIF_EXT",
+                                                                    "rocky shore", "fisheries", "breakwall", 
+                                                                     "building", "jetty", "wharf", "pontoon")))
+summary(margins)
+
+mg_dt <- droplevels(subset(margins, !coastlineType %in% c("ALT100")))
+summary(mg_dt)
+mg_coastline <- aggregate(extension_m/1000 ~ macroregion, data = mg_dt, sum)
+
+##Occupations in LECZ100m
+alt100   <- hard_0[hard_0$coastlineType == "ALT100",]
+summary(alt100$`habitat/structure`)
+
+##LECZ10mm sandy beach
+alt100_sb <- alt100[alt100$`habitat/structure` == "sandy beach",] 
+summary(alt100_sb)
+alt100_sb_coastline <- aggregate(extension_m/1000 ~ macroregion, data = alt100_sb, sum)
+
+## ONLY ALL100 in front to BEACHES##
+alt100_mg  <- droplevels(subset(alt100, !`habitat/structure` %in% c("sandy beach")))
+summary(alt100_mg)
+alt100_mg_coastline <- aggregate(extension_m/1000 ~ macroregion, data = alt100_mg, sum)
+```
+
+####05 ARTIF_ALT and ARTIF_EXT: Barplots per SP coast and regions
+```{r ARTIF_ALT and ARTIF_EXT 02: Plots 01}
+
+### Extensão TOTAL por macrorregião
+total_reg        <- aggregate(extension_m ~ macroregion + coastlineType, data = artif_total, sum)
+total_reg$ext_km <- (total_reg$extension_m/1000)
+total_reg$pot    <- c("aa", "aa", "aa")
+total_reg$macroregion <- factor(total_reg$macroregion, 
+                 levels = c("south region", "central region", "north region"))
+
+total_reg$coastlineType <- factor(total_reg$coastlineType, 
+                 levels = c("ARTIF_EXT", "ARTIF_ALT"))
+f0 <-
+         ggplot(total_reg, aes(x = macroregion, y = ext_km)) + 
+          geom_col(color = "black", aes(fill= coastlineType, alpha=.98)) + theme_classic() +
+          #scale_fill_manual(values=c("darkorange", "tomato", "gold1")) +
+          theme(axis.text.x = element_text(size=13, color="black", angle = 90, vjust=.5, hjust=1),
+                axis.text.y = element_text(size=13, color="black"),
+                axis.title.x = element_text(color="black", size=14),
+                axis.title.y = element_text(color="black", size=14),
+                plot.title = element_text(color="black", size=14, face="bold"))+
+         labs(x = "Coast region", y = "Extension (km)") +
+         ggtitle("") +
+         theme(legend.position = "bottom") + 
+         theme(axis.ticks = element_line(colour = "black", size = .8)) +
+         theme(axis.line  = element_line(colour = 'black', size = .8)) +
+         theme(axis.ticks.length = unit(8, "pt"))+ #coord_flip() +  
+         scale_x_discrete(labels=c('south', 'centre', 'north'))+
+        scale_fill_discrete(labels=c('extended', 'replaced'))
+
+f0
+
+#ggsave("SVGs/CH-Barplot-region.svg", dpi = 300, height = 4.1, width = 2.58, units = "in")
+```
+
+####06 ARTIF_ALT and ARTIF_EXT: Barplot per city
+```{r ARTIF_ALT and ARTIF_EXT 02: Plots 02}
+
+## Summing extension of coastline hardened per city ##
+resp_alt0        <- aggregate(extension_m ~ city + coastlineType, data = artif_total, sum)
+resp_alt0$ext_km <- (resp_alt0$extension_m/1000)
+
+resp_alt0$city <- factor(resp_alt0$city, 
+                 levels = c("Ubatuba", "Caraguatatuba", "Ilhabela", "São Sebastião",
+                             "Bertioga", "Guarujá", "Santos", "São Vicente", "Cubatão",
+                             "Praia Grande", "Mongaguá", "Itanhaém", "Peruíbe", "Iguape",
+                             "Ilha Comprida", "Cananéia"))
+
+resp_alt0$coastlineType <- factor(resp_alt0$coastlineType, 
+                 levels = c("ARTIF_EXT", "ARTIF_ALT"))
+
+fig_alt0 <-
+         ggplot(resp_alt0, aes(x = city, y = ext_km)) + 
+          geom_col(color = "black", aes(fill= coastlineType, alpha=.98)) + theme_classic() +
+          #scale_fill_manual(values=c("darkorange", "tomato", "gold1")) +
+          theme(axis.text.x = element_text(size=13, color="black", angle = 90, vjust=.5, hjust=1),
+                axis.text.y = element_text(size=13, color="black"),
+                axis.title.x = element_text(color="black", size=14),
+                axis.title.y = element_text(color="black", size=14),
+                plot.title = element_text(color="black", size=14, face="bold"))+
+         labs(x = "Coastal municipalities", y = "Extent (km)") +
+         ggtitle("") +
+         theme(legend.position = "none") + 
+         theme(axis.ticks = element_line(colour = "black", size = .8)) +
+         theme(axis.line  = element_line(colour = 'black', size = .8)) +
+         theme(axis.ticks.length = unit(8, "pt"))+ #coord_flip() +  
+         scale_x_discrete(limits = rev(levels(resp_alt0$city))) + ylim(0,60)
+
+fig_alt0
+
+#ggsave("SVGs/CH-per-city-EXTENT.svg", dpi = 300, height = 4.1, width = 6.28, units = "in")
+#Saving 6.28 x 3.99 in image
+```
+
+####07 AS types: SP coast
+```{r SP types of structures}
+
+hard_1 <- droplevels(subset(hard_0, !(coastlineType == "ALT100")))
+hard_1 <- droplevels(subset(hard_1, !(coastlineType == "natural")))
+
+str(hard_1)
+summary(hard_1)
+
+resp_hard <- aggregate(extension_m ~  coastlineType + `habitat/structure`, data = hard_1, sum)
+new_row   <- data.frame("ARTIF_ALT", "pontoon", 0) #creating this field for plotting since there is no data in this case#
+new_row2  <- data.frame("ARTIF_ALT", "fisheries", 0)
+new_row3  <- data.frame("ARTIF_ALT", "jetty", 0)
+
+names(new_row)  <- c("coastlineType", "habitat/structure", "extension_m")
+names(new_row2) <- c("coastlineType", "habitat/structure", "extension_m")
+names(new_row3) <- c("coastlineType", "habitat/structure", "extension_m")
+
+resp_hard <- rbind(resp_hard, new_row, new_row2, new_row3)
+
+resp_hard$coastlineType <- factor(resp_hard$coastlineType, 
+                    levels = c("ARTIF_EXT", "ARTIF_ALT"))
+
+resp_hard$`habitat/structure` <- factor(resp_hard$`habitat/structure`, 
+                    levels = c("building", "pontoon", "fisheries", "wharf", "jetty", "breakwall"))
+
+
+tipos_duros <-  ggplot(resp_hard, aes(x = `habitat/structure`, y = (extension_m/1000), fill = coastlineType)) + 
+          geom_col() + theme_classic() +
+          scale_fill_manual(values=c("gray80", "black")) +
+          theme(axis.text.x = element_text(size=12, color="black"), 
+                axis.text.y = element_text(size=12, color="black"),
+               axis.title.x = element_text(color="black", size=12),
+               axis.title.y = element_text(color="black", size=12))+
+           labs(x = "AS type", y = "Extension (km)") +
+         #facet_grid(~ level)+
+         theme(legend.position = "none") + 
+         theme(axis.ticks = element_line(colour = "black", size = .6)) +
+         theme(axis.line  = element_line(colour = 'black', size = .6)) +
+         theme(axis.ticks.length = unit(6, "pt"))+
+         theme(strip.text.x = element_text(size = 12))+
+         coord_flip() + scale_x_discrete(labels=c('Building', 'Pontoon', 'Fishing & Aquaculture', 
+                                                  'Wharf', 'Jetty ', 'Breakwall'))
+tipos_duros
+
+tipos_duros2 <- tipos_duros + ggbreak::scale_y_break(breaks=c(45, 90), scale = .25, ticklabels = c(90, 100)) 
+tipos_duros2                  
+
+#ggsave("SVGs/CH-AS-types.svg", dpi = 300, height = 3, width = 7, units = "in") 
+```
+
+####08 AS types: per region
+```{r SP types of structures per region}
+
+resp_hard2 <- aggregate(extension_m ~  coastlineType + `habitat/structure` + macroregion, data = hard_1, sum)
+
+new_row    <- data.frame("ARTIF_ALT", "pontoon", "central region",0) 
+new_row2   <- data.frame("ARTIF_ALT", "fisheries", "central region", 0)
+new_row3   <- data.frame("ARTIF_ALT", "jetty", "central region", 0)
+new_row4   <- data.frame("ARTIF_ALT", "pontoon", "south region",0) 
+new_row5   <- data.frame("ARTIF_ALT", "fisheries", "south region", 0)
+new_row6   <- data.frame("ARTIF_ALT", "jetty", "south region", 0)
+new_row7   <- data.frame("ARTIF_ALT", "pontoon", "north region",0)
+new_row8   <- data.frame("ARTIF_ALT", "fisheries", "north region", 0)
+new_row9   <- data.frame("ARTIF_ALT", "jetty", "north region", 0)
+new_row10  <- data.frame("ARTIF_ALT", "wharf", "south region", 0)
+new_row11  <- data.frame("ARTIF_EXT", "wharf", "south region", 0)
+
+names(new_row)  <- c("coastlineType", "habitat/structure", "macroregion", "extension_m")
+names(new_row2) <- c("coastlineType", "habitat/structure", "macroregion", "extension_m")
+names(new_row3) <- c("coastlineType", "habitat/structure", "macroregion", "extension_m")
+names(new_row4) <- c("coastlineType", "habitat/structure", "macroregion", "extension_m")
+names(new_row5) <- c("coastlineType", "habitat/structure", "macroregion", "extension_m")
+names(new_row6) <- c("coastlineType", "habitat/structure", "macroregion", "extension_m")
+names(new_row7) <- c("coastlineType", "habitat/structure", "macroregion", "extension_m")
+names(new_row8) <- c("coastlineType", "habitat/structure", "macroregion", "extension_m")
+names(new_row9) <- c("coastlineType", "habitat/structure", "macroregion", "extension_m")
+names(new_row10) <- c("coastlineType", "habitat/structure", "macroregion", "extension_m")
+names(new_row11) <- c("coastlineType", "habitat/structure", "macroregion", "extension_m")
+
+resp_hard2 <- rbind(resp_hard2, new_row, new_row2, new_row3, new_row4, new_row5, new_row6, new_row7, new_row8, new_row9, new_row10, new_row11)
+
+resp_hard2$coastlineType <- factor(resp_hard2$coastlineType, 
+                    levels = c("ARTIF_EXT", "ARTIF_ALT"))
+
+resp_hard2$`habitat/structure` <- factor(resp_hard2$`habitat/structure`, 
+                    levels = c("breakwall", "jetty", "wharf", "fisheries", "pontoon", "building"))
+
+resp_hard2 <- round_df(resp_hard2, digits = 1)
+
+## Plots
+## Litoral CENTRO
+tipos_BS <-  ggplot(subset(resp_hard2, macroregion %in% c("central region")),
+                        aes(x = `habitat/structure`, y = (extension_m/1000), fill = coastlineType)) + 
+          geom_col() + theme_classic() +
+          scale_fill_manual(values=c("gray80", "black")) +
+          theme(axis.text.x = element_text(size=12, color="black", angle=90, hjust = 1, vjust = .5), 
+                axis.text.y = element_text(size=12, color="black"),
+               axis.title.x = element_text(color="black", size=12),
+               axis.title.y = element_text(color="black", size=12))+
+           labs(x = "AS type", y = "Extension (km)") +
+         #facet_wrap(~ macroregion)+
+         theme(legend.position = "none") + 
+         theme(axis.ticks = element_line(colour = "black", size = .6)) +
+         theme(axis.line  = element_line(colour = 'black', size = .6)) +
+         theme(axis.ticks.length = unit(6, "pt"))+
+         theme(strip.text.x = element_text(size = 12))+
+        # coord_flip() +
+         scale_x_discrete(labels=c('Breakwall', 'Jetty', 'Wharf', 
+                                   'Fishing & Aquaculture', 'Pontoon', 'Building'))
+tipos_BS
+
+tipos_BS2 <- tipos_BS + ggbreak::scale_y_break(breaks=c(40, 60), scale = .25, ticklabels = c(60, 70)) 
+tipos_BS2                  
+
+#ggsave("SVGs/SP-estruturas-BaixadaSant.svg", dpi = 300, height = 7, width = 3, units = "in") 
+
+## north region
+tipos_LN <-  ggplot(subset(resp_hard2, macroregion %in% c("north region")),
+                        aes(x = `habitat/structure`, y = (extension_m/1000), fill = coastlineType)) + 
+          geom_col() + theme_classic() +
+          scale_fill_manual(values=c("gray80", "black")) +
+          theme(axis.text.x = element_text(size=12, color="black", angle=90, hjust = 1, vjust = .5), 
+                axis.text.y = element_text(size=12, color="black"),
+               axis.title.x = element_text(color="black", size=12),
+               axis.title.y = element_text(color="black", size=12))+
+           labs(x = "AS type", y = "Extension (km)") +
+         #facet_wrap(~ macroregion)+
+         theme(legend.position = "none") + 
+         theme(axis.ticks = element_line(colour = "black", size = .6)) +
+         theme(axis.line  = element_line(colour = 'black', size = .6)) +
+         theme(axis.ticks.length = unit(6, "pt"))+
+         theme(strip.text.x = element_text(size = 12))+
+         #coord_flip() + 
+         scale_x_discrete(labels=c('Breakwall', 'Jetty', 'Wharf', 
+                                   'Fishing & Aquaculture', 'Pontoon', 'Building'))
+tipos_LN
+
+tipos_LN2 <- tipos_LN + ggbreak::scale_y_break(breaks=c(11, 17), scale = .25, ticklabels = c(18, 21)) 
+tipos_LN2                  
+
+#ggsave("SVGs/SP-estruturas-LitNorte2.svg", dpi = 300, height = 7, width = 3, units = "in") 
+
+## south region
+tipos_LS <-  ggplot(subset(resp_hard2, macroregion %in% c("south region")),
+                        aes(x = `habitat/structure`, y = (extension_m/1000), fill = coastlineType)) + 
+          geom_col() + theme_classic() +
+          scale_fill_manual(values=c("gray80", "black")) +
+          theme(axis.text.x = element_text(size=12, color="black", angle=90, hjust = 1, vjust = .5), 
+                axis.text.y = element_text(size=12, color="black"),
+               axis.title.x = element_text(color="black", size=12),
+               axis.title.y = element_text(color="black", size=12))+
+           labs(x = "AS type", y = "Extension (km)") +
+         #facet_wrap(~ macroregion)+
+         theme(legend.position = "none") + 
+         theme(axis.ticks = element_line(colour = "black", size = .6)) +
+         theme(axis.line  = element_line(colour = 'black', size = .6)) +
+         theme(axis.ticks.length = unit(6, "pt"))+
+         theme(strip.text.x = element_text(size = 12))+
+         #coord_flip() +
+         scale_x_discrete(labels=c('Breakwall', 'Jetty', 'Wharf', 
+                                   'Fishing & Aquaculture', 'Pontoon', 'Building'))
+tipos_LS
+
+tipos_LS2 <- tipos_LS + ggbreak::scale_y_break(breaks=c(1.6, 6.8), scale = .25, ticklabels = c(8, 12)) 
+tipos_LS2                  
+
+#ggsave("SVGs/SP-estruturas-LitSul.svg", dpi = 300, height = 7, width = 3, units = "in") 
+```
+
+####ALT100 -
+####09 sorting out data per structure type
+```{r sorting out data per structure type}
+
+## Keep only mother DF
+varhandle::rm.all.but("hard_0",keep_functions = T)
+
+## From RAW DATA getting all ALT100 data ## 
+alt100   <- hard_0[hard_0$coastlineType == "ALT100",]
+summary(alt100$`habitat/structure`)
+
+artif_alt <- hard_0[hard_0$coastlineType == "ARTIF_ALT",] 
+artif_ext <- hard_0[hard_0$coastlineType == "ARTIF_EXT",] 
+
+
+## ONLY ALL100 in front to BEACHES##
+alt100beach  <- droplevels(subset(alt100, !`habitat/structure` %in% c("mangrove", "tidal flat", "estuarine beach",
+                                                                      "Atlantic forest", "sand flat")))
+summary(alt100beach$`habitat/structure`)
+str(alt100beach)
+summary(alt100beach)
+
+##Focusing only in mangroves ##
+alt100mangrove  <- droplevels(subset(alt100, !`habitat/structure` %in% c("sandy beach", "tidal flat", "estuarine beach",
+                                                                         "Atlantic forest", "sand flat")))
+summary(alt100mangrove$`habitat/structure`)
+str(alt100mangrove)
+summary(alt100mangrove)
+
+##Focusing only in river/estuary margins ##
+alt100margin  <- droplevels(subset(alt100, !`habitat/structure` %in% c("sandy beach", "mangrove")))
+summary(alt100margin$`habitat/structure`)
+str(alt100margin)
+summary(alt100margin)
+
+##########
+## From RAW DATA getting only sandy beach extension data ## 
+beach_ext <- hard_0[hard_0$`habitat/structure` == "sandy beach",] #creating dataframe beach_ext
+str(beach_ext)
+summary(beach_ext$`habitat/structure`)
+summary(beach_ext)
+
+sum(beach_ext$extension_m)
+sum(beach_ext$extension_m)/1000
+
+##Beaches without structures within 100m ##
+(sum(beach_ext$extension_m)/1000 - sum(alt100beach$extension_m)/1000)## 188.5934 km
+
+##ALT100
+sum(alt100$extension_m)/1000         ## 301.6145 km of all ALT100
+sum(alt100beach$extension_m)/1000    ## 234.7739 km of ALT100 beach
+sum(alt100mangrove$extension_m)/1000 ##  40.2335 km of ALT100 mangrove
+sum(alt100margin$extension_m)/1000   ##  26.6071km of ALT100 margin
+
+## Rocky shores
+rsh   <- hard_0[hard_0$`habitat/structure` == "rocky shore",]
+summary(rsh$`habitat/structure`)
+sum(rsh$extension_m)/1000            ##527.8536 km of ROCKY SHORES ##
+
+rs  <- sum(rsh$extension_m)/1000            ##527.8536 km of ROCKY SHORES ##
+tot <- sum(hard_0$extension_m)/1000  
+sb  <- sum(beach_ext$extension_m)/1000
+ASe <- sum(artif_ext$extension_m)/1000
+ASc <- sum(artif_alt$extension_m)/1000
+LECZtot <- sum(alt100$extension_m)/1000   
+
+
+CLtot <- tot - ASe ## Total mapped coastline (excluding ASe) ##
+CLtot ## 2326.882 km
+
+CLtot2 <- CLtot - rs - sb ## Total mapped coastline (excluding ASe, rocky shore and sandy beaches) ##
+CLtot2 ## 1375.661 km
+
+(ASc/CLtot2)*100             ## = Porcentagem de linha de costa endurecida excluindo praia e costão
+(LECZtot + ASc)/(CLtot - rs) ## = Porcentagem de linha de costa com LECZ100m
+```
+
+####11 ALT100: Beaches
+```{r ALT100 beaches}
+ #######################
+
+### Extensão TOTAL por macrorregião
+beach_resp1      <- aggregate(extension_m ~ macroregion + coastlineType, data = beach_ext, sum)
+beach_resp1$ext_km <- (beach_resp1$extension_m/1000)
+beach_resp1$pot    <- c("aa", "aa", "aa")
+beach_resp1$macroregion <- factor(beach_resp1$macroregion, 
+                 levels = c("south region", "central region", "north region"))
+
+beach_resp1$coastlineType <- factor(beach_resp1$coastlineType, 
+                 levels = c("natural", "ALT100"))
+f.beach1 <-
+         ggplot(beach_resp1, aes(x = macroregion, y = ext_km)) + 
+          geom_col(color = "black", aes(fill= coastlineType, alpha=.98)) + theme_classic() +
+         #scale_fill_manual(values=c("darkorange", "tomato", "gold1")) +
+          theme(axis.text.x = element_text(size=13, color="black", angle = 90, vjust=.5, hjust=1),
+                axis.text.y = element_text(size=13, color="black"),
+                axis.title.x = element_text(color="black", size=14),
+                axis.title.y = element_text(color="black", size=14),
+                plot.title = element_text(color="black", size=14, face="bold"))+
+         labs(x = "Coast region", y = "Extension (km)") +
+         ggtitle("") +
+         theme(legend.position = "bottom") + 
+         theme(axis.ticks = element_line(colour = "black", size = .8)) +
+         theme(axis.line  = element_line(colour = 'black', size = .8)) +
+         theme(axis.ticks.length = unit(8, "pt"))+ #coord_flip() +  
+         scale_x_discrete(labels=c('south', 'centre', 'north'))+
+        scale_fill_discrete(labels=c( 'natural', 'ALT100'))
+
+f.beach1
+
+#ggsave("SVGs/ALT100-Beach-Barplot-region.svg", dpi = 300, height = 4.1, width = 2.58, units = "in")
+
+
+# plotting extension of urbanized and non-urbanized beaches
+resp_beach <- aggregate(extension_m ~  city + coastlineType, data = beach_ext, sum)
+
+resp_beach$city <- factor(resp_beach$city, 
+                    levels = c("Ubatuba", "Caraguatatuba", "Ilhabela","São Sebastião",
+                               "Bertioga", "Guarujá", "Santos", "São Vicente", "Cubatão",
+                               "Praia Grande", "Mongaguá", "Itanhaém", "Peruíbe", "Iguape",
+                               "Ilha Comprida", "Cananéia"))
+
+fig_beach <- ggplot(resp_beach, aes(x = city, y = extension_m/1000)) + 
+          geom_col(color = "black", aes(fill= coastlineType, alpha=.98)) + theme_classic() +
+          #scale_fill_manual(values=c("darkorange", "tomato", "gold1")) +
+          theme(axis.text.x = element_text(size=13, color="black", angle = 90, vjust=.5, hjust=1),
+                axis.text.y = element_text(size=13, color="black"),
+                axis.title.x = element_text(color="black", size=14),
+                axis.title.y = element_text(color="black", size=14),
+                plot.title = element_text(color="black", 
+                                          size=14, 
+                                          face="bold"))+
+         labs(x = "Coastal municipalities", y = "Extension (km)") +
+         ggtitle("") +
+         theme(legend.position = "none") + 
+         theme(axis.ticks = element_line(colour = "black", size = .8)) +
+         theme(axis.line  = element_line(colour = 'black', size = .8)) +
+         theme(axis.ticks.length = unit(8, "pt"))+ #coord_flip() +  
+         scale_x_discrete(limits = rev(levels(resp_beach$city))) +ylim(0,75)
+
+fig_beach
+
+#ggsave("SVGs/Beach-ALT100-per-city.svg", dpi = 300, height = 4.1, width = 6.28, units = "in")
+```
+
+####12 ALT100: Margins
+```{r ALT100 estuaries and rivers margins}
+
+## From raw data, getting estuarine/river margins
+estuary_ext<- droplevels(subset(hard_0, !`habitat/structure` %in% c("sandy beach", "ARTIF_ALT", "ARTIF_EXT", 
+                                                                    "rocky shore", "fisheries", "breakwall", 
+                                                                     "building", "jetty", "wharf", "pontoon")))
+summary(estuary_ext$`habitat/structure`)
+summary(estuary_ext$coastlineType)
+
+### Extensão TOTAL por macrorregião
+margin_resp1      <- aggregate(extension_m ~ macroregion + coastlineType, data = estuary_ext, sum)
+margin_resp1$ext_km <- (margin_resp1$extension_m/1000)
+margin_resp1$pot    <- c("aa", "aa", "aa")
+margin_resp1$macroregion <- factor(margin_resp1$macroregion, 
+                 levels = c("south region", "central region", "north region"))
+
+margin_resp1$coastlineType <- factor(margin_resp1$coastlineType, 
+                 levels = c("ALT100", "natural"))
+f.margin1 <-
+         ggplot(margin_resp1, aes(x = macroregion, y = ext_km)) + 
+          geom_col(color = "black", aes(fill= coastlineType, alpha=.98)) + theme_classic() +
+         #scale_fill_manual(values=c("darkorange", "tomato", "gold1")) +
+          theme(axis.text.x = element_text(size=13, color="black", angle = 90, vjust=.5, hjust=1),
+                axis.text.y = element_text(size=13, color="black"),
+                axis.title.x = element_text(color="black", size=14),
+                axis.title.y = element_text(color="black", size=14),
+                plot.title = element_text(color="black", size=14, face="bold"))+
+         labs(x = "Coast region", y = "Extension (km)") +
+         ggtitle("") +
+         theme(legend.position = "bottom") + 
+         theme(axis.ticks = element_line(colour = "black", size = .8)) +
+         theme(axis.line  = element_line(colour = 'black', size = .8)) +
+         theme(axis.ticks.length = unit(8, "pt"))+ #coord_flip() +  
+         scale_x_discrete(labels=c('south', 'centre', 'north'))+
+         scale_fill_discrete(labels=c( 'ALT100', 'natural'))
+
+f.margin1
+f.margin1b <- f.margin1 + ggbreak::scale_y_break(breaks=c(30, 400), scale = .5, ticklabels = c(500, 700)) 
+f.margin1b  
+
+#ggsave("SVGs/ALT100-Margins-Barplot-region.svg", dpi = 300, height = 5.1, width = 2.58, units = "in")
+
+# plotting extension of urbanized and non-urbanized beaches
+resp_estuary <- aggregate(extension_m ~  city + coastlineType, data = estuary_ext, sum)
+
+resp_estuary$city <- factor(resp_estuary$city, 
+                    levels = c("Ubatuba", "Caraguatatuba", "Ilhabela","São Sebastião",
+                               "Bertioga", "Guarujá", "Santos", "São Vicente", "Cubatão",
+                               "Praia Grande", "Mongaguá", "Itanhaém", "Peruíbe", "Iguape",
+                               "Ilha Comprida", "Cananéia"))
+
+fig_estuary <- ggplot(resp_estuary, aes(x = city, y = extension_m/1000)) + 
+          geom_col(color = "black", aes(fill= coastlineType, alpha=.98)) + theme_classic() +
+          #scale_fill_manual(values=c("darkorange", "tomato", "gold1")) +
+          theme(axis.text.x = element_text(size=13, color="black", angle = 90, vjust=.5, hjust=1),
+                axis.text.y = element_text(size=13, color="black"),
+                axis.title.x = element_text(color="black", size=14),
+                axis.title.y = element_text(color="black", size=14),
+                plot.title = element_text(color="black", 
+                                          size=14, 
+                                          face="bold"))+
+         labs(x = "Coastal municipalities", y = "Extension (km)") +
+         ggtitle("") +
+         theme(legend.position = "none") + 
+         theme(axis.ticks = element_line(colour = "black", size = .8)) +
+         theme(axis.line  = element_line(colour = 'black', size = .8)) +
+         theme(axis.ticks.length = unit(8, "pt"))+ #coord_flip() +  
+         scale_x_discrete(limits = rev(levels(resp_estuary$city))) #+ylim(0,75)
+
+fig_estuary
+fig_estuary2 <- fig_estuary + ggbreak::scale_y_break(breaks=c(200, 450), scale = .25, ticklabels = c(500)) 
+fig_estuary2  
+
+#ggsave("SVGs/Margins-ALT100-per-city2.svg", dpi = 300, height = 5.65, width = 6.28, units = "in")
+
+fig_estuary3 <- ggplot(resp_estuary %>%
+                         filter(coastlineType == "ALT100"),
+                       aes(x = city, y = extension_m/1000)) + 
+          geom_col(color = "black", aes(fill= coastlineType, alpha=.98)) + theme_classic() +
+          #scale_fill_manual(values=c("darkorange", "tomato", "gold1")) +
+          theme(axis.text.x = element_text(size=13, color="black", angle = 90, vjust=.5, hjust=1),
+                axis.text.y = element_text(size=13, color="black"),
+                axis.title.x = element_text(color="black", size=14),
+                axis.title.y = element_text(color="black", size=14),
+                plot.title = element_text(color="black", 
+                                          size=14, 
+                                          face="bold"))+
+         labs(x = "Coastal municipalities", y = "Extension (km)") +
+         ggtitle("") +
+         theme(legend.position = "none") + 
+         theme(axis.ticks = element_line(colour = "black", size = .8)) +
+         theme(axis.line  = element_line(colour = 'black', size = .8)) +
+         theme(axis.ticks.length = unit(8, "pt"))+ #coord_flip() +  
+         scale_x_discrete(limits = rev(levels(resp_estuary$city))) #+ ylim(0,15)
+
+fig_estuary3
+fig_estuary3b <- fig_estuary3 + ggbreak::scale_y_break(breaks=c(15, 15.1), scale = .25, ticklabels = c(160)) 
+fig_estuary3b
+
+#aplot::plot_list(fig_estuary2, fig_estuary3b, nrow = 2)
+#ggsave("SVGs/Margin-ONLY-ALT100-per-city.svg", dpi = 300, height = 5.65, width = 6.28, units = "in")
+```
