@@ -1,0 +1,1 @@
+This folder contains data and codes used in "Pardal, A., Christofoletti, R.A. & Martinez, A.S. Urbanisation on the coastline of the most populous and developed state of Brazil: the extent of coastal hardening and occupations in low-elevation zones. Anthropocene Coasts 7, 15 (2024). https://doi.org/10.1007/s44218-024-00048-8"
